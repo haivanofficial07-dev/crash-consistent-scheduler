@@ -1,0 +1,60 @@
+artifacts = ["/app/scheduler/scheduler.py"]
+
+[task]
+name = "dynamo/crash-consistent-scheduler"
+description = "Repair a persistent distributed scheduler so leases, retries, recurrence, misfires, and crash recovery remain consistent."
+
+[metadata]
+category = "Systems Infrastructure and Operations"
+subcategory = "Scheduling and automation infrastructure"
+model_tested = "GPT-5.4"
+agent_tested = "Terminus-2"
+task_objective = ["fix", "debug"]
+artifact_type = ["codebase", "service_or_daemon"]
+expert_time_estimate_hours = 6
+difficulty_explanation = """
+The task repairs a persistent scheduler used by several workers. One state machine must make
+lease ownership, expiry, fencing tokens, retry attempts, recurring cadence, misfire policy,
+and per-job concurrency agree across crashes and repeated polling. A locally plausible repair
+can still duplicate a logical occurrence, accept a stale completion, drift a recurring schedule,
+or let an expired lease consume capacity. The fixtures are synthetic but model durable state
+and worker races seen in production schedulers. This is realistic work for an engineer debugging
+distributed job execution and recovery semantics; difficulty comes from interacting transitions
+and boundary cases rather than data size or timing pressure.
+"""
+solution_explanation = """
+Treat the JSON state file as the durable source of truth and serialize every read-modify-write
+transition with the sidecar lock. Materialize due timestamps from next_run_at, then advance that
+pointer from the scheduled timestamp rather than completion time. Recover leases at expires_at
+<= now, count only still-valid leases, and claim runnable occurrences while holding the same
+lock. Every claim increments the attempt and creates a new token; heartbeat, completion, and
+failure require the current owner, token, and unexpired lease. Retry returns the same logical
+occurrence to runnable after exponential backoff, while recurrence remains separate. Misfire
+policy is applied once as each due timestamp is materialized.
+"""
+verification_explanation = """
+The verifier guards /app/scheduler/scheduler.py, copies it into a minimal private Python chroot,
+and runs it as an unprivileged process with scenario input over stdin. The submitted process cannot
+see the /tests mount or hidden fixtures. Hidden traces assert exact state transitions and returned
+claim fields without executing the reference solution. Scenario parameters vary job IDs, intervals,
+policies, downtime, lease lengths, and worker order. Tests cover expiry equality, stale-operation
+rejection, atomic single ownership, retry identity and backoff, recurrence cadence, restart
+persistence, misfire/coalesce/skip behavior, concurrency recovery, deterministic ordering, and
+repeated polling. There are no numeric tolerances; malformed paths, symlinks, malformed API results,
+and wrong states are rejected exactly.
+"""
+
+[verifier]
+timeout_sec = 600.0
+
+[agent]
+timeout_sec = 3600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
